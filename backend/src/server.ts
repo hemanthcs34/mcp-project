@@ -12,14 +12,15 @@ import { logger } from "./logger.js";
 import { policy } from "./policy.js";
 import * as registry from "./registry.js";
 
-// --- State ---
-let systemStatus: "HEALTHY" | "CRITICAL" | "DEGRADED" = "HEALTHY";
+// System State
+let systemStatus: "HEALTHY" | "CRITICAL" = "HEALTHY";
 let activeReplicas = 3;
 let lastAlertTime: string | null = null;
+let autoPilotMode = false;
 
 // --- Shared tool execution logic ---
 async function executeMonitor() {
-    const service = registry.getApprovedService();
+    const service = registry.getActiveService();
 
     if (service) {
         // Proxy to registered service
@@ -64,7 +65,7 @@ async function executeScale(replicas: number): Promise<{ success: boolean; messa
         return { success: false, message: `Action Blocked: ${policyCheck.reason}` };
     }
 
-    const service = registry.getApprovedService();
+    const service = registry.getActiveService();
 
     if (service) {
         // Proxy to registered service
@@ -132,7 +133,7 @@ async function executeScale(replicas: number): Promise<{ success: boolean; messa
 async function executeRollback(): Promise<{ success: boolean; message: string }> {
     policy.validateRollback();
 
-    const service = registry.getApprovedService();
+    const service = registry.getActiveService();
 
     if (service) {
         // Proxy to registered service
@@ -191,6 +192,7 @@ app.get("/api/status", (_req: Request, res: Response) => {
         status: systemStatus,
         replicas: activeReplicas,
         lastAlertTime,
+        autoPilotMode,
     });
 });
 
@@ -208,7 +210,29 @@ app.post("/api/trigger-alert", (_req: Request, res: Response) => {
     logger.error("CRITICAL INFRA ALERT: CPU Load > 95%", {
         source: "Simulated Infra",
     });
+
+    // AutoPilot Logic
+    if (autoPilotMode) {
+        logger.info("AutoPilot engaged: Scaling up in 2 seconds...");
+        setTimeout(async () => {
+            logger.info("AutoPilot executes scaling...");
+            await executeScale(10); // Auto-scale to 10 replicas
+        }, 2000);
+    }
+
     res.json({ message: "Alert triggered", lastAlertTime });
+});
+
+app.post("/api/autoscale", (req: Request, res: Response) => {
+    const schema = z.object({ enabled: z.boolean() });
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+        res.status(400).json({ error: "Invalid input" });
+        return;
+    }
+    autoPilotMode = parseResult.data.enabled;
+    logger.info(`AutoPilot Mode: ${autoPilotMode ? "ENABLED" : "DISABLED"}`);
+    res.json({ autoPilotMode });
 });
 
 app.post("/api/scale", async (req: Request, res: Response) => {
@@ -258,13 +282,29 @@ app.get("/api/services", (_req: Request, res: Response) => {
 });
 
 app.get("/api/service", (_req: Request, res: Response) => {
-    const service = registry.getApprovedService();
+    const service = registry.getActiveService();
     if (!service) {
         res.json({ service: null });
         return;
     }
     const { apiKey: _key, ...safe } = service;
     res.json({ service: safe });
+});
+
+app.post("/api/services/:id/activate", (req: Request, res: Response) => {
+    const id = parseInt(req.params.id as string, 10);
+    if (isNaN(id)) {
+        res.status(400).json({ error: "Invalid service ID" });
+        return;
+    }
+
+    const service = registry.activateService(id);
+    if (!service) {
+        res.status(404).json({ error: "Service not found or not approved" });
+        return;
+    }
+
+    res.json({ message: "Service activated", service });
 });
 
 app.post("/api/services/:id/approve", (req: Request, res: Response) => {

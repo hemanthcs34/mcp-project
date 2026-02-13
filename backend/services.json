@@ -1,0 +1,15 @@
+{
+  "services": [
+    {
+      "serviceName": "coursetwinlocalhost",
+      "monitorEndpoint": "http://localhost:8001/api/v1/monitor",
+      "scaleEndpoint": "http://localhost:8001/api/v1/scale",
+      "rollbackEndpoint": "http://localhost:8001/api/v1/rollback",
+      "apiKey": "mcp_dev_secret_key_change_in_production",
+      "status": "approved",
+      "id": 1770957201672,
+      "registeredAt": "2026-02-13T04:33:21.672Z"
+    }
+  ],
+  "activeServiceId": 1770957201672
+}

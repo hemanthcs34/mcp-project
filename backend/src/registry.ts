@@ -1,113 +1,148 @@
 import { z } from "zod";
+import * as fs from "fs";
+import * as path from "path";
 import { logger } from "./logger.js";
 
 // --- Types ---
-export interface ServiceConfig {
-    id: number;
-    serviceName: string;
-    monitorEndpoint: string;
-    scaleEndpoint: string;
-    rollbackEndpoint: string;
-    apiKey: string;
-    status: "pending" | "approved" | "rejected";
-    registeredAt: string;
-}
 
-/** Safe view of a service (no API key) */
-export type ServicePublic = Omit<ServiceConfig, "apiKey">;
-
-// --- Validation ---
-const urlSchema = z.string().url().refine(
-    (url) => url.startsWith("http://") || url.startsWith("https://"),
-    { message: "Endpoint must be an HTTP or HTTPS URL" }
-);
-
-export const registerSchema = z.object({
-    serviceName: z.string().min(1, "Service name is required").max(100),
-    monitorEndpoint: urlSchema,
-    scaleEndpoint: urlSchema,
-    rollbackEndpoint: urlSchema,
-    apiKey: z.string().min(1, "API key is required"),
+export const ServiceConfigSchema = z.object({
+    id: z.number().optional(), // ID assigned on registration
+    serviceName: z.string().min(1),
+    monitorEndpoint: z.string().url(),
+    scaleEndpoint: z.string().url(),
+    rollbackEndpoint: z.string().url(),
+    apiKey: z.string().min(1),
+    status: z.enum(["pending", "approved", "rejected"]).default("pending"),
+    registeredAt: z.string().optional(),
 });
 
+export type ServiceConfig = z.infer<typeof ServiceConfigSchema>;
+
+// Public view of service (no API key)
+export type ServicePublic = Omit<ServiceConfig, "apiKey"> & { isActive: boolean };
+
 // --- Storage ---
-let nextId = 1;
-const services: ServiceConfig[] = [];
+const DATA_FILE = path.join(process.cwd(), "services.json");
 
-// --- Registry Functions ---
+interface RegistryData {
+    services: ServiceConfig[];
+    activeServiceId: number | null;
+}
 
-export function registerService(
-    input: z.infer<typeof registerSchema>
-): ServicePublic {
-    const config: ServiceConfig = {
-        id: nextId++,
-        ...input,
+// Initial state
+let state: RegistryData = {
+    services: [],
+    activeServiceId: null,
+};
+
+// --- Persistence Helpers ---
+function loadData() {
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            const raw = fs.readFileSync(DATA_FILE, "utf-8");
+            const data = JSON.parse(raw);
+            state = {
+                services: data.services || [],
+                activeServiceId: data.activeServiceId || null,
+            };
+            logger.info(`[Registry] Loaded ${state.services.length} services from disk.`);
+        }
+    } catch (error) {
+        logger.error("[Registry] Failed to load services", { error: String(error) });
+    }
+}
+
+function saveData() {
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+    } catch (error) {
+        logger.error("[Registry] Failed to save services", { error: String(error) });
+    }
+}
+
+// Load on startup
+loadData();
+
+// --- Functions ---
+
+export function registerService(input: unknown): ServiceConfig {
+    const config = ServiceConfigSchema.parse(input);
+
+    const newService: ServiceConfig = {
+        ...config,
+        id: Date.now(), // Simple ID generation
         status: "pending",
         registeredAt: new Date().toISOString(),
     };
-    services.push(config);
 
-    logger.info("Service registered (pending approval)", {
-        id: config.id,
-        serviceName: config.serviceName,
-        monitorEndpoint: config.monitorEndpoint,
-        scaleEndpoint: config.scaleEndpoint,
-        rollbackEndpoint: config.rollbackEndpoint,
-        apiKey: "[REDACTED]",
-    });
+    state.services.push(newService);
+    saveData();
 
-    return stripApiKey(config);
+    logger.info("Service registered", { name: newService.serviceName, id: newService.id });
+    return newService;
 }
 
-/** Get the currently approved service (first approved one), or null */
-export function getApprovedService(): ServiceConfig | null {
-    return services.find((s) => s.status === "approved") ?? null;
-}
-
-/** Get all services (safe view, no API keys) */
 export function getAllServices(): ServicePublic[] {
-    return services.map(stripApiKey);
+    return state.services.map(s => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { apiKey, ...rest } = s;
+        return {
+            ...rest,
+            isActive: s.id === state.activeServiceId
+        };
+    });
 }
 
-/** Approve a pending service by ID. Returns the safe view or null if not found. */
-export function approveService(id: number): ServicePublic | null {
-    const service = services.find((s) => s.id === id);
-    if (!service) return null;
+export function getApprovedServices(): ServiceConfig[] {
+    return state.services.filter(s => s.status === "approved");
+}
 
-    // Reject any currently approved service (only one active at a time)
-    for (const s of services) {
-        if (s.status === "approved") {
-            s.status = "rejected";
-            logger.info("Previous service deactivated", {
-                id: s.id,
-                serviceName: s.serviceName,
-            });
+export function getActiveService(): ServiceConfig | null {
+    if (!state.activeServiceId) return null;
+    return state.services.find(s => s.id === state.activeServiceId) || null;
+}
+
+export function approveService(id: number): ServiceConfig | undefined {
+    const service = state.services.find(s => s.id === id);
+    if (service) {
+        service.status = "approved";
+
+        // Auto-activate if it's the only approved service
+        const approvedCount = state.services.filter(s => s.status === "approved").length;
+        if (approvedCount === 1) {
+            state.activeServiceId = id;
+            logger.info("Auto-activated service", { name: service.serviceName });
         }
+
+        saveData();
+        logger.info("Service approved", { name: service.serviceName, id });
     }
-
-    service.status = "approved";
-    logger.info("Service approved", {
-        id: service.id,
-        serviceName: service.serviceName,
-    });
-    return stripApiKey(service);
+    return service;
 }
 
-/** Reject a pending service by ID */
-export function rejectService(id: number): ServicePublic | null {
-    const service = services.find((s) => s.id === id);
-    if (!service) return null;
-
-    service.status = "rejected";
-    logger.info("Service rejected", {
-        id: service.id,
-        serviceName: service.serviceName,
-    });
-    return stripApiKey(service);
+export function rejectService(id: number): ServiceConfig | undefined {
+    const service = state.services.find(s => s.id === id);
+    if (service) {
+        service.status = "rejected";
+        if (state.activeServiceId === id) {
+            state.activeServiceId = null;
+            logger.info("Active service rejected, system now simulation-only");
+        }
+        saveData();
+    }
+    return service;
 }
 
-// --- Helpers ---
-function stripApiKey(config: ServiceConfig): ServicePublic {
-    const { apiKey: _key, ...safe } = config;
-    return safe;
+export function activateService(id: number): ServiceConfig | undefined {
+    const service = state.services.find(s => s.id === id);
+    if (service && service.status === "approved") {
+        state.activeServiceId = id;
+        saveData();
+        logger.info("Service activated", { name: service.serviceName, id });
+        return service;
+    }
+    return undefined;
 }
+
+// --- Validation Export ---
+export const registerSchema = ServiceConfigSchema.omit({ id: true, status: true, registeredAt: true });

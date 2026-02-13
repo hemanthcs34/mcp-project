@@ -8,6 +8,7 @@ interface ServicePublic {
     rollbackEndpoint: string;
     status: 'pending' | 'approved' | 'rejected';
     registeredAt: string;
+    isActive: boolean;
 }
 
 const API_BASE = 'http://localhost:3001/api';
@@ -103,8 +104,28 @@ function Admin() {
         }
     };
 
+    const handleActivate = async (id: number) => {
+        try {
+            const res = await fetch(`${API_BASE}/services/${id}/activate`, {
+                method: 'POST',
+            });
+            if (res.ok) {
+                alert('Service activated');
+                // Refresh services to update UI
+                const servicesRes = await fetch(`${API_BASE}/services`);
+                const servicesData = await servicesRes.json();
+                setServices(servicesData);
+            } else {
+                alert('Failed to activate service');
+            }
+        } catch (err) {
+            console.error('Failed to activate:', err);
+            alert('Activation failed');
+        }
+    };
+
     const pendingServices = services.filter((s) => s.status === 'pending');
-    const approvedService = services.find((s) => s.status === 'approved');
+    const approvedServices = services.filter((s) => s.status === 'approved');
 
     return (
         <div className="admin-page">
@@ -179,27 +200,36 @@ function Admin() {
                 </button>
             </form>
 
-            <h2>Active Service</h2>
-            {approvedService ? (
-                <div className="service-card approved">
-                    <div className="service-header">
-                        <span className="service-name">✅ {approvedService.serviceName}</span>
-                        <span className="service-status">APPROVED</span>
-                    </div>
-                    <div className="service-endpoints">
-                        <div>
-                            <strong>Monitor:</strong> {approvedService.monitorEndpoint}
-                        </div>
-                        <div>
-                            <strong>Scale:</strong> {approvedService.scaleEndpoint}
-                        </div>
-                        <div>
-                            <strong>Rollback:</strong> {approvedService.rollbackEndpoint}
-                        </div>
-                    </div>
-                </div>
+            <h2>Approved Services ({approvedServices.length})</h2>
+            {approvedServices.length === 0 ? (
+                <div className="no-service">No approved services</div>
             ) : (
-                <div className="no-service">No approved service</div>
+                <div className="service-list">
+                    {approvedServices.map((service) => (
+                        <div key={service.id} className={`service-card approved ${service.isActive ? 'active-card' : ''}`}>
+                            <div className="service-header">
+                                <span className="service-name">
+                                    {service.isActive ? '🟢' : '⚪'} {service.serviceName}
+                                </span>
+                                {service.isActive ? (
+                                    <span className="service-status active">ACTIVE</span>
+                                ) : (
+                                    <button
+                                        onClick={() => handleActivate(service.id)}
+                                        className="activate-btn"
+                                    >
+                                        Connect
+                                    </button>
+                                )}
+                            </div>
+                            <div className="service-endpoints">
+                                <div><strong>Monitor:</strong> {service.monitorEndpoint}</div>
+                                <div><strong>Scale:</strong> {service.scaleEndpoint}</div>
+                                <div><strong>Rollback:</strong> {service.rollbackEndpoint}</div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
             )}
 
             <h2>Pending Approvals ({pendingServices.length})</h2>

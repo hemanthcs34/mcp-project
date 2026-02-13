@@ -13,6 +13,7 @@ interface SystemStatus {
   status: 'HEALTHY' | 'CRITICAL' | 'DEGRADED';
   replicas: number;
   lastAlertTime: string | null;
+  autoPilotMode: boolean;
 }
 
 const API_BASE = 'http://localhost:3001/api';
@@ -134,6 +135,24 @@ function App() {
     }
   }, []);
 
+  const toggleAutoPilot = async () => {
+    if (!status) return;
+    const newState = !status.autoPilotMode;
+    try {
+      const res = await fetch(`${API_BASE}/autoscale`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: newState }),
+      });
+      if (res.ok) {
+        // Optimistically update local state or wait for poll
+        setStatus({ ...status, autoPilotMode: newState });
+      }
+    } catch (err) {
+      console.error('Failed to toggle AutoPilot:', err);
+    }
+  };
+
   // --- Helpers ---
   const getStatusColor = () => {
     switch (status?.status) {
@@ -219,6 +238,43 @@ function App() {
                 <span className="metric-value">{mttrElapsed}</span>
               </div>
             </div>
+          </div>
+
+          {/* AutoPilot Toggle */}
+          <div className="autopilot-section" style={{
+            marginBottom: '1rem',
+            background: 'rgba(0, 184, 212, 0.1)',
+            padding: '1rem',
+            borderRadius: '12px',
+            border: `1px solid ${status?.autoPilotMode ? '#00b8d4' : '#2a3f5f'}`,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '1.5rem' }}>🤖</span>
+              <div>
+                <div style={{ fontWeight: 'bold', color: '#e0e0e0' }}>AutoPilot Mode</div>
+                <div style={{ fontSize: '0.8rem', color: '#78909c' }}>
+                  {status?.autoPilotMode ? 'Automatically scales on alert' : 'Manual control only'}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={toggleAutoPilot}
+              style={{
+                background: status?.autoPilotMode ? '#00b8d4' : 'transparent',
+                border: `2px solid ${status?.autoPilotMode ? '#00b8d4' : '#78909c'}`,
+                color: status?.autoPilotMode ? '#fff' : '#78909c',
+                padding: '0.5rem 1rem',
+                borderRadius: '20px',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                transition: 'all 0.3s ease'
+              }}
+            >
+              {status?.autoPilotMode ? 'ON' : 'OFF'}
+            </button>
           </div>
 
           {/* Actions */}
