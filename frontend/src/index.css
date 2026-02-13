@@ -1,0 +1,10 @@
+:root {
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  color: #e0e0e0;
+  background: #0a0e27;
+}
+
+body {
+  margin: 0;
+}
