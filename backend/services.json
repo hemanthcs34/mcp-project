@@ -9,7 +9,17 @@
       "status": "approved",
       "id": 1770957201672,
       "registeredAt": "2026-02-13T04:33:21.672Z"
+    },
+    {
+      "serviceName": "coursetwin",
+      "monitorEndpoint": "https://coursetwin-backend.onrender.com/api/monitor",
+      "scaleEndpoint": "https://coursetwin-backend.onrender.com/api/scale",
+      "rollbackEndpoint": "https://coursetwin-backend.onrender.com/api/rollback",
+      "apiKey": "mcp_dev_secret_key_change_in_production",
+      "status": "approved",
+      "id": 1770979442802,
+      "registeredAt": "2026-02-13T10:44:02.802Z"
     }
   ],
-  "activeServiceId": 1770957201672
+  "activeServiceId": 1770979442802
 }

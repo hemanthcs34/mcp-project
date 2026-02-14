@@ -5,7 +5,7 @@ interface ScaleArgs {
 }
 
 export const policy = {
-    validateScale: (args: ScaleArgs): { allowed: boolean; reason?: string } => {
+    validateScale: (args: ScaleArgs): { allowed: boolean; approvalRequired?: boolean; reason?: string; requestDetails?: any } => {
         if (!Number.isFinite(args.replicas)) {
             const reason = 'Replicas must be a finite number';
             logger.policyViolation('Scale tool validation failed', { reason, args });
@@ -30,11 +30,15 @@ export const policy = {
             return { allowed: false, reason };
         }
 
-        // Guardrail: Max 10 replicas
+        // Guardrail: Max 10 replicas > Requires Approval
         if (args.replicas > 10) {
-            const reason = 'Policy Violation: Cannot scale above 10 replicas without manual approval';
-            logger.policyViolation('Scale tool blocked', { reason, args });
-            return { allowed: false, reason };
+            const reason = 'Policy Warning: High scale (>10) requires manual approval';
+            return {
+                allowed: false,
+                approvalRequired: true,
+                reason,
+                requestDetails: { replicas: args.replicas }
+            };
         }
 
         logger.info('Policy passed for scale_tool', args);

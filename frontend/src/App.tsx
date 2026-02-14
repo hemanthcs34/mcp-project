@@ -36,6 +36,10 @@ function App() {
   useEffect(() => {
     let active = true;
 
+    // Reset simulation on mount (Progressive Load Feature)
+    fetch(`${API_BASE}/simulation/reset`, { method: 'POST' })
+      .catch(err => console.error("Failed to reset simulation:", err));
+
     const fetchData = async () => {
       try {
         const [statusRes, logsRes, serviceRes] = await Promise.all([
@@ -292,7 +296,7 @@ function App() {
                 type="number"
                 className="scale-input"
                 min={1}
-                max={10}
+                max={100}
                 value={scaleInput}
                 onChange={(e) => setScaleInput(e.target.value)}
               />

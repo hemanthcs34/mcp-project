@@ -11,10 +11,18 @@ interface ServicePublic {
     isActive: boolean;
 }
 
+interface PendingApproval {
+    id: string;
+    action: "scale";
+    details: { replicas: number };
+    timestamp: string;
+}
+
 const API_BASE = 'http://localhost:3001/api';
 
 function Admin() {
     const [services, setServices] = useState<ServicePublic[]>([]);
+    const [approvals, setApprovals] = useState<PendingApproval[]>([]);
     const [formData, setFormData] = useState({
         serviceName: '',
         monitorEndpoint: '',
@@ -27,11 +35,16 @@ function Admin() {
     useEffect(() => {
         const fetchServices = async () => {
             try {
-                const res = await fetch(`${API_BASE}/services`);
-                const data = await res.json();
-                setServices(data);
+                const [servicesRes, approvalsRes] = await Promise.all([
+                    fetch(`${API_BASE}/services`),
+                    fetch(`${API_BASE}/approvals`)
+                ]);
+                const servicesData = await servicesRes.json();
+                const approvalsData = await approvalsRes.json();
+                setServices(servicesData);
+                setApprovals(approvalsData);
             } catch (err) {
-                console.error('Failed to fetch services:', err);
+                console.error('Failed to fetch data:', err);
             }
         };
 
@@ -121,6 +134,25 @@ function Admin() {
         } catch (err) {
             console.error('Failed to activate:', err);
             alert('Activation failed');
+        }
+    };
+    const handlePolicyApprove = async (id: string) => {
+        try {
+            const res = await fetch(`${API_BASE}/approvals/${id}/approve`, {
+                method: 'POST',
+            });
+            if (res.ok) {
+                alert('Policy violation approved & executed');
+                // Force refresh
+                const approvalsRes = await fetch(`${API_BASE}/approvals`);
+                const approvalsData = await approvalsRes.json();
+                setApprovals(approvalsData);
+            } else {
+                alert('Failed to approve policy violation');
+            }
+        } catch (err) {
+            console.error('Failed to approve:', err);
+            alert('Approval failed');
         }
     };
 
@@ -266,6 +298,36 @@ function Admin() {
                                     className="reject-btn"
                                 >
                                     ❌ Reject
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <h2>Policy Approvals ({approvals.length})</h2>
+            {approvals.length === 0 ? (
+                <div className="no-service">No pending policy violations</div>
+            ) : (
+                <div className="service-list">
+                    {approvals.map((approval) => (
+                        <div key={approval.id} className="service-card pending" style={{ borderColor: '#FF2D00' }}>
+                            <div className="service-header">
+                                <span className="service-name">⚠️ Policy Violation</span>
+                                <span className="service-status">ACTION REQUIRED</span>
+                            </div>
+                            <div className="service-endpoints">
+                                <div><strong>Action:</strong> {approval.action.toUpperCase()}</div>
+                                <div><strong>Reason:</strong> High Scale ({approval.details.replicas} Replicas)</div>
+                                <div><strong>Time:</strong> {new Date(approval.timestamp).toLocaleTimeString()}</div>
+                            </div>
+                            <div className="service-actions">
+                                <button
+                                    onClick={() => handlePolicyApprove(approval.id)}
+                                    className="approve-btn"
+                                    style={{ width: '100%' }}
+                                >
+                                    ✅ Approve & Execute
                                 </button>
                             </div>
                         </div>
