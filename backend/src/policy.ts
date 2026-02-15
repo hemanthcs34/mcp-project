@@ -30,6 +30,13 @@ export const policy = {
             return { allowed: false, reason };
         }
 
+        // Guardrail: Max 50 replicas > HARD BLOCK
+        if (args.replicas > 50) {
+            const reason = 'Policy Violation: Scaling above 50 replicas is unsafe and BLOCKED.';
+            logger.policyViolation('Scale tool blocked (Unsafe)', { reason, args });
+            return { allowed: false, reason };
+        }
+
         // Guardrail: Max 10 replicas > Requires Approval
         if (args.replicas > 10) {
             const reason = 'Policy Warning: High scale (>10) requires manual approval';

@@ -5,6 +5,14 @@ export interface LogEntry {
     details?: unknown;
 }
 
+export interface DecisionLog {
+    event: "AI_DECISION";
+    reason: string;
+    confidence: number;
+    metrics: Record<string, number>;
+    recommendedReplicas: number;
+}
+
 const logs: LogEntry[] = [];
 
 export const logger = {

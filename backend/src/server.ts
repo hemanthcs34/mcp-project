@@ -46,6 +46,7 @@ interface IncidentReport {
     final_status: "resolved";
 }
 const incidentReports: IncidentReport[] = [];
+let activeIncidentId: string | null = null; // Track current active incident
 
 // --- Shared tool execution logic ---
 async function executeMonitor() {
@@ -55,6 +56,8 @@ async function executeMonitor() {
         // Proxy to registered service
         try {
             logger.info("Calling external monitor endpoint", {
+                event: "EXTERNAL_CALL",
+                action: "monitor",
                 serviceName: service.serviceName,
                 endpoint: service.monitorEndpoint,
             });
@@ -73,6 +76,33 @@ async function executeMonitor() {
                 }
                 if (data.status === 'HEALTHY' || data.status === 'CRITICAL') {
                     if (systemStatus !== data.status) {
+                        // Feature 2: Incident Lifecycle Tracking - External System Recovery
+                        if (systemStatus === 'CRITICAL' && data.status === 'HEALTHY' && activeIncidentId) {
+                            const remediationTime = new Date().toISOString();
+                            const startTime = lastAlertTime ? new Date(lastAlertTime).getTime() : Date.now();
+                            const mttr = (Date.now() - startTime) / 1000;
+
+                            const report: IncidentReport = {
+                                incident_id: activeIncidentId,
+                                start_time: lastAlertTime || new Date().toISOString(),
+                                end_time: remediationTime,
+                                mttr_seconds: mttr,
+                                actions_taken: [`Synced state: System recovered to ${data.status}`],
+                                final_status: "resolved"
+                            };
+                            incidentReports.push(report);
+
+                            logger.info("Incident Lifecycle: Resolved (External Sync)", {
+                                event: "INCIDENT_RESOLVED",
+                                incidentId: activeIncidentId,
+                                mttr,
+                                finalState: "HEALTHY",
+                                report
+                            });
+                            activeIncidentId = null;
+                            lastAlertTime = null;
+                        }
+
                         logger.info(`State Sync: Updating systemStatus to ${data.status} based on external monitor`);
                         systemStatus = data.status;
                         if (systemStatus === 'HEALTHY') lastAlertTime = null;
@@ -107,12 +137,28 @@ async function executeMonitor() {
     // If CPU < 90% was CRITICAL, it recovers.
     if (cpu > 90) {
         if (systemStatus !== "CRITICAL") {
+            const reason = `CPU load ${cpu.toFixed(1)}% exceeds critical threshold of 90%`;
+            logger.info("Monitor Decision: Upgrade to CRITICAL", {
+                event: "AI_DECISION",
+                reason,
+                confidence: 1.0,
+                metrics: { cpu, memory, currentLoad, activeReplicas },
+                recommendedReplicas: activeReplicas + 1 // Implied recommendation
+            });
             systemStatus = "CRITICAL";
             lastAlertTime = new Date().toISOString();
             logger.error(`System overload detected: CPU ${cpu.toFixed(1)}%`, { currentLoad, activeReplicas });
         }
     } else {
         if (systemStatus === "CRITICAL") {
+            const reason = `CPU load ${cpu.toFixed(1)}% is below safe threshold. Initiating recovery.`;
+            logger.info("Monitor Decision: Downgrade to HEALTHY", {
+                event: "AI_DECISION",
+                reason,
+                confidence: 0.9,
+                metrics: { cpu, memory, currentLoad, activeReplicas },
+                recommendedReplicas: activeReplicas
+            });
             // Recovery detected
             systemStatus = "HEALTHY";
             const remediationTime = new Date().toISOString();
@@ -127,7 +173,7 @@ async function executeMonitor() {
 
             // Generate report on recovery
             const report: IncidentReport = {
-                incident_id: `INC-${Date.now()}`,
+                incident_id: activeIncidentId || `INC-${Date.now()}`,
                 start_time: lastAlertTime || new Date().toISOString(),
                 end_time: remediationTime,
                 mttr_seconds: mttr,
@@ -135,6 +181,15 @@ async function executeMonitor() {
                 final_status: "resolved"
             };
             incidentReports.push(report);
+
+            logger.info("Incident Lifecycle: Resolved", {
+                event: "INCIDENT_RESOLVED",
+                incidentId: activeIncidentId,
+                mttr,
+                finalState: "HEALTHY",
+                report
+            });
+            activeIncidentId = null;
             lastAlertTime = null;
         }
         systemStatus = "HEALTHY";
@@ -150,9 +205,9 @@ async function executeMonitor() {
     };
 }
 
-async function executeScale(replicas: number): Promise<{ success: boolean; message: string; explanation?: any; approvalRequired?: boolean; approvalId?: string }> {
-    // Policy check ALWAYS runs first
-    const policyCheck = policy.validateScale({ replicas });
+async function executeScale(replicas: number, bypassPolicy = false): Promise<{ success: boolean; message: string; explanation?: any; approvalRequired?: boolean; approvalId?: string }> {
+    // Policy check ALWAYS runs first unless bypassed
+    const policyCheck = bypassPolicy ? { allowed: true, approvalRequired: false } : policy.validateScale({ replicas });
 
     // Feature 2: Handle Approval Requirement
     if (policyCheck.approvalRequired) {
@@ -163,7 +218,11 @@ async function executeScale(replicas: number): Promise<{ success: boolean; messa
             details: { replicas },
             timestamp: new Date().toISOString()
         });
-        logger.warn("Scale action requires approval", { approvalId, replicas });
+        logger.warn("Scale action requires approval", {
+            event: "APPROVAL_REQUIRED",
+            approvalId,
+            replicas
+        });
         return {
             success: false,
             message: `Action requires admin approval. Approval ID: ${approvalId}`,
@@ -182,6 +241,8 @@ async function executeScale(replicas: number): Promise<{ success: boolean; messa
         // Proxy to registered service
         try {
             logger.info("Calling external scale endpoint", {
+                event: "EXTERNAL_CALL",
+                action: "scale",
                 serviceName: service.serviceName,
                 endpoint: service.scaleEndpoint,
                 replicas,
@@ -206,8 +267,33 @@ async function executeScale(replicas: number): Promise<{ success: boolean; messa
 
                 // If we enhanced the python script to return status, use it
                 if (data.status) {
+                    // Feature 2: Incident Lifecycle Tracking - External System Recovery (Scale Action)
+                    if (systemStatus === 'CRITICAL' && data.status === 'HEALTHY' && activeIncidentId) {
+                        const remediationTime = new Date().toISOString();
+                        const startTime = lastAlertTime ? new Date(lastAlertTime).getTime() : Date.now();
+                        const mttr = (Date.now() - startTime) / 1000;
+
+                        const report: IncidentReport = {
+                            incident_id: activeIncidentId,
+                            start_time: lastAlertTime || new Date().toISOString(),
+                            end_time: remediationTime,
+                            mttr_seconds: mttr,
+                            actions_taken: [`Scale action success: System recovered to ${data.status}`],
+                            final_status: "resolved"
+                        };
+                        incidentReports.push(report);
+
+                        logger.info("Incident Lifecycle: Resolved (Scale Action)", {
+                            event: "INCIDENT_RESOLVED",
+                            incidentId: activeIncidentId,
+                            mttr,
+                            finalState: "HEALTHY",
+                            report
+                        });
+                        activeIncidentId = null;
+                        lastAlertTime = null;
+                    }
                     systemStatus = data.status;
-                    if (systemStatus === 'HEALTHY') lastAlertTime = null;
                 }
 
                 logger.info(`State Sync: Updated activeReplicas to ${activeReplicas}`);
@@ -228,7 +314,12 @@ async function executeScale(replicas: number): Promise<{ success: boolean; messa
     // We do NOT manually set status to HEALTHY here.
     // We let the next monitor cycle (or immediate re-calc) determine health based on new capacity.
 
-    logger.info("scale_tool executed (simulation)", { replicas, currentLoad });
+    logger.info("scale_tool executed (simulation)", {
+        event: "SIMULATION_ACTION",
+        action: "scale",
+        replicas,
+        currentLoad
+    });
 
     // Immediate feedback based on math
     const totalCapacity = activeReplicas * CAPACITY_PER_REPLICA;
@@ -268,7 +359,13 @@ async function executeRollback(): Promise<{ success: boolean; message: string; e
     activeReplicas = 3; // Reset to default
     // Again, we do NOT force HEALTHY. If load is high, this will cause CRITICAL status in monitor.
 
-    logger.info("Rollback executed (simulation)", { previousReplicas, activeReplicas, currentLoad });
+    logger.info("Rollback executed (simulation)", {
+        event: "SIMULATION_ACTION",
+        action: "rollback",
+        previousReplicas,
+        activeReplicas,
+        currentLoad
+    });
 
     return {
         success: true,
@@ -285,6 +382,15 @@ async function executeRollback(): Promise<{ success: boolean; message: string; e
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Feature 2: Incident Lifecycle API
+app.get("/api/incidents", (_req: Request, res: Response) => {
+    res.json({
+        activeIncidentId,
+        history: incidentReports
+    });
+});
+
 
 // API Endpoints
 app.get("/api/status", (_req: Request, res: Response) => {
@@ -307,6 +413,8 @@ app.get("/api/status", (_req: Request, res: Response) => {
         });
         return;
     }
+
+
 
     // Simulation Mode: Calculate status based on Math
     const totalCapacity = activeReplicas * CAPACITY_PER_REPLICA;
@@ -350,6 +458,15 @@ app.post("/api/trigger-alert", (_req: Request, res: Response) => {
 
     systemStatus = "CRITICAL";
     lastAlertTime = new Date().toISOString();
+
+    // Feature 2: Incident Lifecycle Tracking
+    activeIncidentId = `INC-${Date.now()}`;
+    logger.info("Incident Lifecycle: Started", {
+        event: "INCIDENT_STARTED",
+        incidentId: activeIncidentId,
+        load: currentLoad
+    });
+
     logger.error(`CRITICAL INFRA ALERT: Level ${incidentCount} Load Spike (${currentLoad} RPS)`, {
         source: "Simulated Traffic",
         difficulty: `Level ${incidentCount}`,
@@ -362,6 +479,20 @@ app.post("/api/trigger-alert", (_req: Request, res: Response) => {
         const neededReplicas = Math.ceil((currentLoad * 1.2) / CAPACITY_PER_REPLICA);
         // Ensure at least +2 from current
         const targetReplicas = Math.max(neededReplicas, activeReplicas + 2);
+
+        // Feature 1: Explainable AI Decision Layer
+        logger.info("AutoPilot Decision Algorithm Executed", {
+            event: "AI_DECISION",
+            reason: `Incoming load ${currentLoad} RPS exceeds capacity. Targeting 20% buffer.`,
+            confidence: 0.95,
+            metrics: {
+                currentLoad,
+                activeReplicas,
+                capacityPerReplica: CAPACITY_PER_REPLICA,
+                utilization: (currentLoad / (activeReplicas * CAPACITY_PER_REPLICA)).toFixed(2)
+            },
+            recommendedReplicas: targetReplicas
+        });
 
         logger.info(`AutoPilot engaged: Targeting ${targetReplicas} replicas to handle ${currentLoad} RPS...`);
 
@@ -442,39 +573,18 @@ app.post("/api/approvals/:id/approve", async (req: Request, res: Response) => {
     }
 
     if (approval.action === "scale") {
-        // Execute the pending action
-        // We need to bypass policy check or pass a flag. 
-        // For simplicity here, we assume if it's in pending map, it's pre-validated for approval.
-        // We will directly call backend logic or re-call executeScale but need to bypass the check.
-        // Actually, easiest is to just execute logic directly or modify executeScale to accept 'bypass'.
-        // Let's modify executeScale slightly or just call external directly here.
+        // Execute the pending action with policy bypass
+        logger.info("Admin approved action", {
+            event: "APPROVED_ACTION_EXECUTED",
+            approvalId: id,
+            replicas: approval.details.replicas
+        });
 
-        // BETTER: Just call executeScale but we need to prevent infinite loop.
-        // Let's trust the logic: If user calls APPROVE, we just execute.
-        // But executeScale checks policy. We need to tell policy to allow it? 
-        // Or cleaner: modify executeScale to take an 'approved' flag.
-
-        // Quick fix: We manually execute what executeScale would do for the happy path.
-        // THIS IS A SIMPLIFICATION. In real system, pass { validated: true } to function.
+        const result = await executeScale(approval.details.replicas, true);
         pendingApprovals.delete(id as string);
-
-        // Re-run safely
-        // We accept that policy will fail again, so we need to bypass.
-        // Let's add a 'bypassPolicy' arg to executeScale?? NO, "Do not change working logic".
-
-        // Alternative: Just manually do the work here.
-        const replicas = approval.details.replicas;
-        const service = registry.getActiveService();
-        if (service) {
-            await fetch(service.scaleEndpoint, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${service.apiKey}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ replicas })
-            });
-        }
-        activeReplicas = replicas;
-        logger.info("Executed approved action", { id, replicas });
-        res.json({ message: "Action approved and executed" });
+        res.json({ message: "Approved and executed", result });
+    } else {
+        res.status(400).json({ error: "Unknown action type" });
     }
 });
 
